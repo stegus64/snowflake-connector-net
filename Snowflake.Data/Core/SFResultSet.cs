@@ -6,6 +6,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Snowflake.Data.Log;
 using Snowflake.Data.Client;
+using System.Collections.Generic;
+using System;
+using System.Diagnostics;
 
 namespace Snowflake.Data.Core
 {
@@ -22,6 +25,8 @@ namespace Snowflake.Data.Core
         private readonly IChunkDownloader _chunkDownloader;
 
         private IResultChunk _currentChunk;
+
+        private Stopwatch stopwatch = Stopwatch.StartNew();
 
         public SFResultSet(QueryExecResponseData responseData, SFStatement sfStatement, CancellationToken cancellationToken) : base()
         {
@@ -66,9 +71,24 @@ namespace Snowflake.Data.Core
                 throw new SnowflakeDbException(SFError.DATA_READER_ALREADY_CLOSED);
             }
 
+            if (0 == fetchCount)
+            {
+                Logger.Info("Starting. Fetching first row.");
+                stopwatch.Restart();
+            }
+            else if (0 == (fetchCount % 100000))
+            {
+                LogAverageConversionTimesForLast100000rows();
+            }
+
+            fetchCount++;
             _currentChunkRowIdx++;
             if (_currentChunkRowIdx < _currentChunkRowCount)
             {
+                if (0 == (fetchCount %100000))
+                {
+                    Logger.Info($"Fetched {fetchCount} rows");
+                }
                 return true;
             }
 
@@ -77,19 +97,54 @@ namespace Snowflake.Data.Core
                 // GetNextChunk could be blocked if download result is not done yet. 
                 // So put this piece of code in a seperate task
                 Logger.Info("Get next chunk from chunk downloader");
-                IResultChunk nextChunk = await _chunkDownloader.GetNextChunkAsync().ConfigureAwait(false);
+                IResultChunk nextChunk = await
+                    Measure(
+                        @"nextChunk",
+                        out double nextChunkTime,
+                        async () =>
+                        {
+                            IResultChunk result = await _chunkDownloader.GetNextChunkAsync().ConfigureAwait(false);
+                            return result;
+                        });
                 if (nextChunk != null)
                 {
                     resetChunkInfo(nextChunk);
+                    if (0 == (fetchCount % 100000))
+                    {
+                        Logger.Info($"Fetched {fetchCount} rows");
+                    }
                     return true;
                 }
                 else
                 {
+                    stopwatch.Stop();
+                    Logger.Info("All data retrieved. Last row returned.");
+                    Logger.Info($"Fetch process took {stopwatch.Elapsed.TotalMilliseconds} ms");
+                    if (timings.TryGetValue("nextChunk", out double nextChunkTotalTime))
+                    {
+                        Logger.Debug("---- Time spent getting next chunk ----");
+                        Logger.Debug($"Total time : {nextChunkTotalTime} ms");
+                        Logger.Debug($"Average time : {nextChunkTotalTime / (float)_totalChunkCount } ms\n");
+                    }
+                    LogAverageConversionTimes();
                     return false;
                 }
             }
-            
-           return false;
+
+            stopwatch.Stop();
+            Logger.Info("All data retrieved. Last row returned.");
+            Logger.Info($"Fetch process took {stopwatch.Elapsed.TotalMilliseconds} ms");
+            if (Logger.IsDebugEnabled())
+            {
+                if (timings.TryGetValue("nextChunk", out double nextChunkTotalTime))
+                {
+                    Logger.Debug("---- Time spent getting next chunk ----");
+                    Logger.Debug($"Total time : {nextChunkTotalTime} ms");
+                    Logger.Debug($"Average time : {nextChunkTotalTime / (float)_totalChunkCount } ms\n");
+                }
+                LogAverageConversionTimes();
+            }
+            return false;
         }
 
         internal override bool Next()
@@ -99,23 +154,64 @@ namespace Snowflake.Data.Core
                 throw new SnowflakeDbException(SFError.DATA_READER_ALREADY_CLOSED);
             }
 
+            if (0 == fetchCount)
+            {
+                Logger.Info("Starting. Fetching first row.");
+                stopwatch.Restart();
+            }
+            else if (0 == (fetchCount % 100000))
+            {
+                LogAverageConversionTimesForLast100000rows();
+            }
+
+            fetchCount++;
             _currentChunkRowIdx++;
             if (_currentChunkRowIdx < _currentChunkRowCount)
             {
+                if (0 == (fetchCount % 100000))
+                {
+                    Logger.Info($"Fetched {fetchCount} rows");
+                }
                 return true;
             }
 
             if (_chunkDownloader != null)
             {
                 Logger.Info("Get next chunk from chunk downloader");
-                IResultChunk nextChunk = Task.Run(async() => await _chunkDownloader.GetNextChunkAsync()).Result;
+                IResultChunk nextChunk = Measure(
+                        @"nextChunk",
+                        out double nextChunkTime,
+                        () =>
+                        {
+                            return Task.Run(async () => await _chunkDownloader.GetNextChunkAsync().ConfigureAwait(false)).Result;
+                        });
+
                 if (nextChunk != null)
                 {
                     resetChunkInfo(nextChunk);
+                    if (0 == (fetchCount % 100000))
+                    {
+                        Logger.Info($"Fetched {fetchCount} rows");
+                    }
                     return true;
                 }
             }
-           return false;
+
+            stopwatch.Stop();
+            Logger.Info("All data retrieved. Last row returned.");
+            Logger.Info($"Fetch process took {stopwatch.Elapsed.TotalMilliseconds} ms");
+            if (Logger.IsDebugEnabled())
+            {
+                if (timings.TryGetValue("nextChunk", out double nextChunkTotalTime))
+                {
+                    Logger.Debug("---- Time spent getting next chunk ----");
+                    Logger.Debug($"Total time : {nextChunkTotalTime} ms");
+                    Logger.Debug($"Average time : {nextChunkTotalTime / (float)_totalChunkCount } ms\n");
+                }
+                LogAverageConversionTimes();
+            }
+
+            return false;
         }
 
         protected override UTF8Buffer getObjectInternal(int columnIndex)
