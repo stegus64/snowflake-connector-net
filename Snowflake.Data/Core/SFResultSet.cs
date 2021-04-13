@@ -25,6 +25,8 @@ namespace Snowflake.Data.Core
 
         private IResultChunk _currentChunk;
 
+        int _nextChunkIndex = 0;
+
         public SFResultSet(QueryExecResponseData responseData, SFStatement sfStatement, CancellationToken cancellationToken) : base()
         {
             columnCount = responseData.rowType.Count;
@@ -59,6 +61,7 @@ namespace Snowflake.Data.Core
             _currentChunk = nextChunk;
             _currentChunkRowIdx = 0;
             _currentChunkRowCount = _currentChunk.GetRowCount();
+            _nextChunkIndex = _currentChunk.GetChunkIndex() + 1;
         }
 
         internal override async Task<bool> NextAsync()
@@ -109,18 +112,23 @@ namespace Snowflake.Data.Core
 
             if (_chunkDownloader != null)
             {
-                Logger.Info("Get next chunk from chunk downloader");
+                Logger.Info($"Wait for chunk #{_nextChunkIndex}");
+                var beginWait = DateTime.Now;
                 waitTimer.Start();
+                var sw = Stopwatch.StartNew();
                 IResultChunk nextChunk = Task.Run(async() => await _chunkDownloader.GetNextChunkAsync()).Result;
                 waitTimer.Stop();
+                sw.Stop();
+                ((SFBlockingChunkDownloaderV3)_chunkDownloader).AddWaitStats(beginWait, DateTime.Now);
                 if (nextChunk != null)
                 {
+                    Logger.Info($"Got chunk #{nextChunk.GetChunkIndex()} from chunk downloader, time = {sw.ElapsedMilliseconds} ms");
                     resetChunkInfo(nextChunk);
                     return true;
                 }
             }
             Logger.Info($"elapsedTime={elapsedTimer.ElapsedMilliseconds} ms waitTime={waitTimer.ElapsedMilliseconds} ms parseTime={parseTimer.ElapsedMilliseconds}ms clientTime={elapsedTimer.ElapsedMilliseconds - waitTimer.ElapsedMilliseconds - parseTimer.ElapsedMilliseconds} ms");
-           return false;
+            return false;
         }
 
         protected override UTF8Buffer getObjectInternal(int columnIndex)

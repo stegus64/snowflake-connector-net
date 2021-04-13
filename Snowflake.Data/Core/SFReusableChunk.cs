@@ -61,6 +61,11 @@ namespace Snowflake.Data.Core
             data.add(bytes, length);
         }
 
+        public string GetStatistics()
+        {
+            return data.GetStatistics();
+        }
+
         private class BlockResultData
         {
             private static readonly int NULL_VALUE = -100;
@@ -83,6 +88,38 @@ namespace Snowflake.Data.Core
 
             internal BlockResultData()
             { }
+
+            public string GetStatistics()
+            {
+                return $"nextIndex={nextIndex} currentDatOffset={currentDatOffset} blockCount={blockCount} metaBlockCount={metaBlockCount} totalMemory={GetMemoryUsed_kb()} kB MemoryNeeded={GetMemoryNeeded_kb()} kB";
+            }
+
+            public long GetMemoryNeeded_kb()
+            {
+                long result = 0;
+                result += currentDatOffset;
+                result += nextIndex * 2 * 4;
+                return result/1024;
+            }
+
+            public long GetMemoryUsed_kb()
+            {
+                long result = 0;
+                foreach (var item in data)
+                {
+                    result += item.Length;
+                }
+                foreach (var item in offsets)
+                {
+                    result += item.Length * 4;
+                }
+                foreach (var item in lengths)
+                {
+                    result += item.Length * 4;
+                }
+
+                return result/1024;
+            }
 
             internal void Reset(int rowCount, int colCount, int uncompressedSize)
             {

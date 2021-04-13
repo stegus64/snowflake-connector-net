@@ -20,9 +20,27 @@ using Snowflake.Data.Log;
 
 namespace Snowflake.Data.Core
 {
+    class DownloadStatistic
+    {
+        public DateTime beginTime;
+        public DateTime endTime;
+        public int rowcount;
+        public int chunkIndex;
+        public string info;
+    }
+
+    class WaitStatistic
+    {
+        public DateTime beginTime;
+        public DateTime endTime;
+    }
+
     class SFBlockingChunkDownloaderV3 : IChunkDownloader
     {
         static private SFLogger logger = SFLoggerFactory.GetLogger<SFBlockingChunkDownloaderV3>();
+
+        List<DownloadStatistic> downloadStatistics = new List<DownloadStatistic>();
+        List<WaitStatistic> waitStatistics = new List<WaitStatistic>();
 
         private List<SFReusableChunk> chunkDatas = new List<SFReusableChunk>();
 
@@ -88,12 +106,6 @@ namespace Snowflake.Data.Core
             return Int32.Parse(val);
         }
 
-
-        /*public Task<IResultChunk> GetNextChunkAsync()
-        {
-            return _downloadTasks.IsCompleted ? Task.FromResult<SFResultChunk>(null) : _downloadTasks.Take();
-        }*/
-
         public Task<IResultChunk> GetNextChunkAsync()
         {
             logger.Info($"NextChunkToConsume: {nextChunkToConsumeIndex}, NextChunkToDownload: {nextChunkToDownloadIndex}");
@@ -121,14 +133,25 @@ namespace Snowflake.Data.Core
             }
             else
             {
+                LogStatistics();
                 return Task.FromResult<IResultChunk>(null);
             }
         }
 
         private async Task<IResultChunk> DownloadChunkAsync(DownloadContextV3 downloadContext)
         {
-            //logger.Info($"Start donwloading chunk #{downloadContext.chunkIndex}");
+
+            Stopwatch sw = Stopwatch.StartNew();
+            logger.Info($"Start downloading chunk #{downloadContext.chunk.chunkIndexToDownload}");
             SFReusableChunk chunk = downloadContext.chunk;
+
+            var stat = new DownloadStatistic();
+            stat.beginTime = DateTime.Now;
+            stat.chunkIndex = chunk.chunkIndexToDownload;
+            lock (downloadStatistics)
+            {
+                downloadStatistics.Add(stat);
+            }
 
             S3DownloadRequest downloadRequest = new S3DownloadRequest()
             {
@@ -147,8 +170,60 @@ namespace Snowflake.Data.Core
             {
                 ParseStreamIntoChunk(stream, chunk);
             }
-            logger.Info($"Succeed downloading chunk #{chunk.chunkIndexToDownload}");
+            logger.Info($"Succeed downloading chunk #{chunk.chunkIndexToDownload} time = {sw.ElapsedMilliseconds} ms rows = {chunk.RowCount}");
+            stat.endTime = DateTime.Now;
+            stat.rowcount = chunk.RowCount;
+            //stat.info = ((SFReusableChunk)chunk).GetStatistics();
+
             return chunk;
+        }
+
+        public void AddWaitStats(DateTime beginWait, DateTime endWait)
+        {
+            waitStatistics.Add(new WaitStatistic { beginTime = beginWait, endTime = endWait });
+        }
+
+        public void LogStatistics()
+        {
+            if (!logger.IsInfoEnabled())
+                return;
+
+            logger.Info($"-----------------");
+            logger.Info($"Download finished");
+
+            if (downloadStatistics.Count == 0)
+                return;
+
+            // The width of the timeline chart
+            const int CHARCOUNT = 160;
+
+            DateTime firstTime = downloadStatistics[0].beginTime;
+            DateTime lastTime = DateTime.Now;
+            int ElapsedTime = (int)((lastTime - firstTime).TotalMilliseconds);
+            int WaitTime = 0;
+            for (int i = 0; i < waitStatistics.Count; i++)
+            {
+                WaitTime += (int)((waitStatistics[i].endTime - waitStatistics[i].beginTime).TotalMilliseconds);
+            }
+            logger.Info($"Elapsed time = {ElapsedTime} ms, WaitTime = {WaitTime} ms, ParseTime= {ElapsedTime - WaitTime} ms");
+            var builder = new TimelineBuilder(firstTime, lastTime, CHARCOUNT);
+            logger.Info($"Each character is {builder.ms_per_char:0} ms");
+            for (int i = 0; i < waitStatistics.Count; i++)
+            {
+                char c = (i % 10).ToString()[0];
+                builder.AddSegment('-', waitStatistics[i].beginTime, false);
+                builder.AddSegment(c, waitStatistics[i].endTime, false);
+            }
+            logger.Info(builder.ToString());
+
+            for (int i = 0; i < downloadStatistics.Count; i++)
+            {
+                builder.Reset();
+                builder.AddSegment(' ', downloadStatistics[i].beginTime, false);
+                builder.AddSegment('=', downloadStatistics[i].endTime, true);
+                string s = builder.ToString() + $" #{i} {(downloadStatistics[i].endTime - downloadStatistics[i].beginTime).TotalMilliseconds:0} ms {downloadStatistics[i].rowcount} rows {downloadStatistics[i].info}";
+                logger.Info(s);
+            }
         }
 
 
