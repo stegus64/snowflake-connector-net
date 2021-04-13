@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Snowflake.Data.Log;
 using Snowflake.Data.Client;
+using System;
+using System.Diagnostics;
 
 namespace Snowflake.Data.Core
 {
@@ -108,13 +110,16 @@ namespace Snowflake.Data.Core
             if (_chunkDownloader != null)
             {
                 Logger.Info("Get next chunk from chunk downloader");
+                waitTimer.Start();
                 IResultChunk nextChunk = Task.Run(async() => await _chunkDownloader.GetNextChunkAsync()).Result;
+                waitTimer.Stop();
                 if (nextChunk != null)
                 {
                     resetChunkInfo(nextChunk);
                     return true;
                 }
             }
+            Logger.Info($"elapsedTime={elapsedTimer.ElapsedMilliseconds} ms waitTime={waitTimer.ElapsedMilliseconds} ms parseTime={parseTimer.ElapsedMilliseconds}ms clientTime={elapsedTimer.ElapsedMilliseconds - waitTimer.ElapsedMilliseconds - parseTimer.ElapsedMilliseconds} ms");
            return false;
         }
 

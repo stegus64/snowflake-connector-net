@@ -3,6 +3,7 @@
  */
 
 using System;
+using System.Diagnostics;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -25,19 +26,28 @@ namespace Snowflake.Data.Core
 
         protected abstract UTF8Buffer getObjectInternal(int columnIndex);
 
+        protected Stopwatch parseTimer = new Stopwatch();
+        protected Stopwatch waitTimer = new Stopwatch();
+        protected Stopwatch elapsedTimer = Stopwatch.StartNew();
+
         protected SFBaseResultSet()
         {
         }
 
         internal T GetValue<T>(int columnIndex)
         {
+            parseTimer.Start();
             UTF8Buffer val = getObjectInternal(columnIndex);
             var types = sfResultSetMetaData.GetTypesByIndex(columnIndex);
-            return (T)SFDataConverter.ConvertToCSharpVal(val, types.Item1, typeof(T));
+            T result = (T)SFDataConverter.ConvertToCSharpVal(val, types.Item1, typeof(T));
+            parseTimer.Stop();
+            return result;
         }
 
         internal string GetString(int columnIndex)
         {
+            parseTimer.Start();
+            string result;
             var type = sfResultSetMetaData.getColumnTypeByIndex(columnIndex);
             switch (type)
             {
@@ -45,19 +55,26 @@ namespace Snowflake.Data.Core
                     var val = GetValue(columnIndex);
                     if (val == DBNull.Value)
                         return null;
-                    return SFDataConverter.toDateString((DateTime)val, 
+                    result =  SFDataConverter.toDateString((DateTime)val, 
                         sfResultSetMetaData.dateOutputFormat);
+                    break;
                 //TODO: Implement SqlFormat for timestamp type, aka parsing format specified by user and format the value
                 default:
-                    return getObjectInternal(columnIndex).SafeToString(); 
+                    result = getObjectInternal(columnIndex).SafeToString();
+                    break;
             }
+            parseTimer.Stop();
+            return result;
         }
 
         internal object GetValue(int columnIndex)
         {
+            parseTimer.Start();
             UTF8Buffer val = getObjectInternal(columnIndex);
             var types = sfResultSetMetaData.GetTypesByIndex(columnIndex);
-            return SFDataConverter.ConvertToCSharpVal(val, types.Item1, types.Item2);
+            object result = SFDataConverter.ConvertToCSharpVal(val, types.Item1, types.Item2);
+            parseTimer.Stop();
+            return result;
         }
         
         internal void close()
